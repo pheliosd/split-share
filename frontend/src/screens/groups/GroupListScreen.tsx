@@ -53,7 +53,7 @@ export const GroupListScreen = ({ navigation }: any) => {
                             key={group.id}
                             style={styles.groupCard}
                             onPress={() =>
-                                navigation.navigate('GroupDetail', { groupId: group.id })
+                                navigation.navigate('GroupDetail', { groupId: group.id, groupName: group.name })
                             }
                         >
                             <Card.Content>
