@@ -17,6 +17,7 @@ import {
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useAppDispatch, useAppSelector } from '@hooks/redux';
 import { logout } from '@store/slices/authSlice';
+import { setTheme } from '@store/slices/uiSlice';
 import { useGetSupportedCurrenciesQuery } from '@api/currencyApi';
 import { spacing } from '@theme';
 
@@ -26,10 +27,11 @@ export const ProfileScreen = () => {
     const theme = useTheme();
     const dispatch = useAppDispatch();
     const user = useAppSelector((state) => state.auth.user);
+    const currentTheme = useAppSelector((state: any) => state.ui.theme);
+    const isDarkMode = currentTheme === 'dark';
 
     const [currencyDialogVisible, setCurrencyDialogVisible] = useState(false);
     const [selectedCurrency, setSelectedCurrency] = useState('USD');
-    const [darkMode, setDarkMode] = useState(false);
     const [snackbar, setSnackbar] = useState('');
 
     const { data: currenciesData } = useGetSupportedCurrenciesQuery();
@@ -109,8 +111,11 @@ export const ProfileScreen = () => {
                         left={(props) => <List.Icon {...props} icon="theme-light-dark" />}
                         right={() => (
                             <Switch
-                                value={darkMode}
-                                onValueChange={setDarkMode}
+                                value={isDarkMode}
+                                onValueChange={(val) => {
+                                    dispatch(setTheme(val ? 'dark' : 'light'));
+                                    setSnackbar(`Switched to ${val ? 'dark' : 'light'} mode`);
+                                }}
                             />
                         )}
                     />
