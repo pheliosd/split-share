@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
     View,
     StyleSheet,
@@ -18,13 +18,13 @@ import {
     Checkbox,
     Card,
     Divider,
+    ActivityIndicator,
 } from 'react-native-paper';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { useCreateExpenseMutation } from '@api/expensesApi';
+import { useGetExpenseQuery, useUpdateExpenseMutation } from '@api/expensesApi';
 import { useGetGroupsQuery } from '@api/groupsApi';
-import { useAppSelector } from '@hooks/redux';
 import { spacing } from '@theme';
 
 const CATEGORIES = [
@@ -44,7 +44,6 @@ const SPLIT_TYPES = [
 ];
 
 const schema = z.object({
-    groupId: z.string().min(1, 'Select a group'),
     description: z.string().min(1, 'Description required').max(255),
     amount: z.number().min(0.01, 'Amount must be positive'),
     currency: z.string().length(3),
@@ -56,54 +55,83 @@ const schema = z.object({
 
 type FormData = z.infer<typeof schema>;
 
-export const AddExpenseScreen = ({ navigation, route }: any) => {
+export const EditExpenseScreen = ({ navigation, route }: any) => {
+    const { expenseId } = route.params;
     const theme = useTheme();
-    const currentUser = useAppSelector((state: any) => state.auth.user);
-    const [createExpense, { isLoading }] = useCreateExpenseMutation();
+
+    const { data, isLoading: loadingExpense } = useGetExpenseQuery(expenseId);
+    const [updateExpense, { isLoading: updating }] = useUpdateExpenseMutation();
     const { data: groupsData } = useGetGroupsQuery();
+
     const [error, setError] = useState('');
     const [success, setSuccess] = useState(false);
+    const [initialized, setInitialized] = useState(false);
 
-    // Member selection & split values
+    // Member selection & split values (mirroring AddExpenseScreen)
     const [selectedMembers, setSelectedMembers] = useState<string[]>([]);
     const [splitValues, setSplitValues] = useState<Record<string, string>>({});
+
+    const expense = data?.expense;
 
     const {
         control,
         handleSubmit,
         formState: { errors },
         watch,
-        setValue,
+        reset,
     } = useForm<FormData>({
         resolver: zodResolver(schema),
         defaultValues: {
-            groupId: route.params?.groupId || '',
             description: '',
             amount: 0,
             currency: 'USD',
             category: 'other',
             notes: '',
-            payerId: currentUser?.id || '',
+            payerId: '',
             splitType: 'equal',
         },
     });
 
+    // Pre-populate form once expense data loads
+    useEffect(() => {
+        if (expense && !initialized) {
+            reset({
+                description: expense.description || '',
+                amount: parseFloat(expense.amount) || 0,
+                currency: expense.currency || 'USD',
+                category: expense.category || 'other',
+                notes: expense.notes || '',
+                payerId: expense.payerId || '',
+                splitType: expense.splitType || 'equal',
+            });
+
+            // Pre-populate splits
+            if (expense.splits && expense.splits.length > 0) {
+                const memberIds = expense.splits.map((s: any) => s.userId);
+                setSelectedMembers(memberIds);
+
+                const vals: Record<string, string> = {};
+                expense.splits.forEach((s: any) => {
+                    if (expense.splitType === 'exact') vals[s.userId] = s.amount?.toString() || '';
+                    else if (expense.splitType === 'percentage') vals[s.userId] = s.percentage?.toString() || '';
+                    else if (expense.splitType === 'shares') vals[s.userId] = s.shares?.toString() || '';
+                });
+                setSplitValues(vals);
+            }
+
+            setInitialized(true);
+        }
+    }, [expense, initialized, reset]);
+
     const splitType = watch('splitType');
-    const selectedGroupId = watch('groupId');
     const amount = watch('amount');
 
+    // Get group members from the expense's group
     const groupMembers = React.useMemo(() => {
-        if (!groupsData?.groups || !selectedGroupId) return [];
-        const group = groupsData.groups.find((g: any) => g.id === selectedGroupId);
+        if (!groupsData?.groups || !expense?.groupId) return [];
+        const group = groupsData.groups.find((g: any) => g.id === expense.groupId);
         return group?.members || [];
-    }, [groupsData, selectedGroupId]);
-
-    // Auto-select all members when group changes
-    React.useEffect(() => {
-        if (groupMembers.length > 0) {
-            setSelectedMembers(groupMembers.map((m: any) => m.userId));
-        }
-    }, [groupMembers.length]);
+    }, [groupsData, expense?.groupId]);
 
     const toggleMember = useCallback((userId: string) => {
         setSelectedMembers((prev) =>
@@ -111,7 +139,7 @@ export const AddExpenseScreen = ({ navigation, route }: any) => {
         );
     }, []);
 
-    // Compute per-member preview amounts
+    // Real-time split preview
     const splitPreview = React.useMemo(() => {
         if (!amount || selectedMembers.length === 0) return {};
         const preview: Record<string, number> = {};
@@ -125,45 +153,43 @@ export const AddExpenseScreen = ({ navigation, route }: any) => {
             });
         } else if (splitType === 'percentage') {
             selectedMembers.forEach((id) => {
-                const pct = parseFloat(splitValues[id] || '0');
-                preview[id] = (amount * pct) / 100;
+                preview[id] = (amount * parseFloat(splitValues[id] || '0')) / 100;
             });
         } else if (splitType === 'shares') {
             const totalShares = selectedMembers.reduce(
                 (sum, id) => sum + parseFloat(splitValues[id] || '1'), 0
             );
             selectedMembers.forEach((id) => {
-                const shares = parseFloat(splitValues[id] || '1');
-                preview[id] = (amount * shares) / totalShares;
+                preview[id] = (amount * parseFloat(splitValues[id] || '1')) / totalShares;
             });
         }
         return preview;
     }, [amount, splitType, selectedMembers, splitValues]);
 
-    // Validation: for non-equal splits, check sum
+    // Validation
     const splitValidationError = React.useMemo(() => {
         if (splitType === 'equal' || !amount) return '';
-        const total = Object.values(splitPreview).reduce((a, b) => a + b, 0);
         if (splitType === 'percentage') {
             const pctSum = selectedMembers.reduce(
                 (s, id) => s + parseFloat(splitValues[id] || '0'), 0
             );
-            if (Math.abs(pctSum - 100) > 0.01) return `Percentages must sum to 100% (currently ${pctSum.toFixed(1)}%)`;
+            if (Math.abs(pctSum - 100) > 0.01)
+                return `Percentages must sum to 100% (currently ${pctSum.toFixed(1)}%)`;
         } else if (splitType === 'exact') {
-            if (Math.abs(total - amount) > 0.01) return `Amounts must sum to $${amount.toFixed(2)} (currently $${total.toFixed(2)})`;
+            const total = Object.values(splitPreview).reduce((a, b) => a + b, 0);
+            if (Math.abs(total - amount) > 0.01)
+                return `Amounts must sum to $${amount.toFixed(2)} (currently $${total.toFixed(2)})`;
         }
         return '';
     }, [splitType, splitPreview, amount, selectedMembers, splitValues]);
 
-    const buildSplits = () => {
-        return selectedMembers.map((userId) => {
+    const buildSplits = () =>
+        selectedMembers.map((userId) => {
             if (splitType === 'equal') return { userId };
             if (splitType === 'exact') return { userId, amount: parseFloat(splitValues[userId] || '0') };
             if (splitType === 'percentage') return { userId, percentage: parseFloat(splitValues[userId] || '0') };
-            if (splitType === 'shares') return { userId, shares: parseFloat(splitValues[userId] || '1') };
-            return { userId };
+            return { userId, shares: parseFloat(splitValues[userId] || '1') };
         });
-    };
 
     const onSubmit = async (data: FormData) => {
         if (selectedMembers.length === 0) {
@@ -176,16 +202,38 @@ export const AddExpenseScreen = ({ navigation, route }: any) => {
         }
         try {
             setError('');
-            await createExpense({
-                ...data,
-                splits: buildSplits(),
+            await updateExpense({
+                expenseId,
+                data: { ...data, splits: buildSplits() },
             }).unwrap();
             setSuccess(true);
             setTimeout(() => navigation.goBack(), 1500);
         } catch (err: any) {
-            setError(err?.data?.error?.message || 'Failed to create expense');
+            setError(err?.data?.error?.message || 'Failed to update expense');
         }
     };
+
+    if (loadingExpense || !initialized) {
+        return (
+            <View style={[styles.centered, { backgroundColor: theme.colors.background }]}>
+                <ActivityIndicator size="large" />
+                <Text variant="bodyMedium" style={{ marginTop: spacing.md }}>
+                    Loading expense...
+                </Text>
+            </View>
+        );
+    }
+
+    if (!expense) {
+        return (
+            <View style={[styles.centered, { backgroundColor: theme.colors.background }]}>
+                <Text variant="bodyLarge">Expense not found</Text>
+                <Button onPress={() => navigation.goBack()} style={{ marginTop: spacing.md }}>
+                    Go Back
+                </Button>
+            </View>
+        );
+    }
 
     return (
         <KeyboardAvoidingView
@@ -196,29 +244,6 @@ export const AddExpenseScreen = ({ navigation, route }: any) => {
                 contentContainerStyle={styles.scrollContent}
                 keyboardShouldPersistTaps="handled"
             >
-                {/* Group Selection */}
-                {!route.params?.groupId && (
-                    <Controller
-                        control={control}
-                        name="groupId"
-                        render={({ field: { value, onChange } }) => (
-                            <View style={styles.section}>
-                                <Text variant="titleMedium" style={styles.label}>Group *</Text>
-                                <RadioButton.Group onValueChange={onChange} value={value}>
-                                    {groupsData?.groups?.map((group: any) => (
-                                        <RadioButton.Item
-                                            key={group.id}
-                                            label={group.name}
-                                            value={group.id}
-                                        />
-                                    ))}
-                                </RadioButton.Group>
-                                {errors.groupId && <Text style={styles.errorText}>{errors.groupId.message}</Text>}
-                            </View>
-                        )}
-                    />
-                )}
-
                 {/* Description */}
                 <Controller
                     control={control}
@@ -227,7 +252,6 @@ export const AddExpenseScreen = ({ navigation, route }: any) => {
                         <TextInput
                             mode="outlined"
                             label="Description *"
-                            placeholder="What's this expense for?"
                             value={value}
                             onChangeText={onChange}
                             onBlur={onBlur}
@@ -236,7 +260,9 @@ export const AddExpenseScreen = ({ navigation, route }: any) => {
                         />
                     )}
                 />
-                {errors.description && <Text style={styles.errorText}>{errors.description.message}</Text>}
+                {errors.description && (
+                    <Text style={styles.errorText}>{errors.description.message}</Text>
+                )}
 
                 {/* Amount */}
                 <Controller
@@ -246,7 +272,6 @@ export const AddExpenseScreen = ({ navigation, route }: any) => {
                         <TextInput
                             mode="outlined"
                             label="Amount *"
-                            placeholder="0.00"
                             value={value?.toString() || ''}
                             onChangeText={(text) => onChange(parseFloat(text) || 0)}
                             onBlur={onBlur}
@@ -257,7 +282,9 @@ export const AddExpenseScreen = ({ navigation, route }: any) => {
                         />
                     )}
                 />
-                {errors.amount && <Text style={styles.errorText}>{errors.amount.message}</Text>}
+                {errors.amount && (
+                    <Text style={styles.errorText}>{errors.amount.message}</Text>
+                )}
 
                 {/* Category */}
                 <Text variant="titleMedium" style={styles.label}>Category</Text>
@@ -299,7 +326,9 @@ export const AddExpenseScreen = ({ navigation, route }: any) => {
                                     />
                                 ))}
                             </RadioButton.Group>
-                            {errors.payerId && <Text style={styles.errorText}>{errors.payerId.message}</Text>}
+                            {errors.payerId && (
+                                <Text style={styles.errorText}>{errors.payerId.message}</Text>
+                            )}
                         </View>
                     )}
                 />
@@ -363,7 +392,7 @@ export const AddExpenseScreen = ({ navigation, route }: any) => {
                                                     splitType === 'percentage'
                                                         ? <TextInput.Affix text="%" />
                                                         : splitType === 'shares'
-                                                            ? <TextInput.Affix text="shares" />
+                                                            ? <TextInput.Affix text="sh" />
                                                             : <TextInput.Affix text="$" />
                                                 }
                                                 style={styles.splitInput}
@@ -420,12 +449,20 @@ export const AddExpenseScreen = ({ navigation, route }: any) => {
                 <Button
                     mode="contained"
                     onPress={handleSubmit(onSubmit)}
-                    loading={isLoading}
-                    disabled={isLoading || !!splitValidationError}
+                    loading={updating}
+                    disabled={updating || !!splitValidationError}
                     style={styles.submitButton}
-                    icon="check"
+                    icon="content-save"
                 >
-                    {isLoading ? 'Creating...' : 'Create Expense'}
+                    {updating ? 'Saving...' : 'Save Changes'}
+                </Button>
+
+                <Button
+                    mode="text"
+                    onPress={() => navigation.goBack()}
+                    style={{ marginTop: spacing.sm }}
+                >
+                    Cancel
                 </Button>
             </ScrollView>
 
@@ -438,7 +475,7 @@ export const AddExpenseScreen = ({ navigation, route }: any) => {
                 {error}
             </Snackbar>
             <Snackbar visible={success} onDismiss={() => setSuccess(false)} duration={1500}>
-                ✅ Expense created!
+                ✅ Expense updated!
             </Snackbar>
         </KeyboardAvoidingView>
     );
@@ -446,6 +483,7 @@ export const AddExpenseScreen = ({ navigation, route }: any) => {
 
 const styles = StyleSheet.create({
     container: { flex: 1 },
+    centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
     scrollContent: { padding: spacing.lg, paddingBottom: spacing.xl * 2 },
     section: { marginBottom: spacing.md },
     input: { marginBottom: spacing.sm },
