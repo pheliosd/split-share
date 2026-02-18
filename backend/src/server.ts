@@ -123,14 +123,74 @@ await fastify.register(currencyRoutes, { prefix: '/api/v1/currencies' });
 
 // Error handler
 fastify.setErrorHandler((error, request, reply) => {
-    fastify.log.error(error);
+    fastify.log.error({ err: error, url: request.url, method: request.method });
 
-    const statusCode = error.statusCode || 500;
+    // AppError (our typed errors)
+    if (error.name === 'AppError' || (error as any).isOperational) {
+        return reply.status((error as any).statusCode || 400).send({
+            error: {
+                code: (error as any).code || 'APP_ERROR',
+                message: error.message,
+                statusCode: (error as any).statusCode || 400,
+            },
+        });
+    }
 
-    reply.status(statusCode).send({
+    // Fastify validation errors (JSON Schema)
+    if (error.validation) {
+        return reply.status(422).send({
+            error: {
+                code: 'VALIDATION_ERROR',
+                message: 'Validation failed',
+                statusCode: 422,
+                details: error.validation,
+            },
+        });
+    }
+
+    // JWT errors
+    if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
+        return reply.status(401).send({
+            error: {
+                code: 'UNAUTHORIZED',
+                message: error.name === 'TokenExpiredError' ? 'Token expired' : 'Invalid token',
+                statusCode: 401,
+            },
+        });
+    }
+
+    // Prisma errors
+    if (error.constructor?.name?.startsWith('Prisma')) {
+        const prismaCode = (error as any).code;
+        if (prismaCode === 'P2002') {
+            return reply.status(409).send({
+                error: { code: 'CONFLICT', message: 'A record with this value already exists', statusCode: 409 },
+            });
+        }
+        if (prismaCode === 'P2025') {
+            return reply.status(404).send({
+                error: { code: 'NOT_FOUND', message: 'Record not found', statusCode: 404 },
+            });
+        }
+    }
+
+    // Fastify built-in status errors (e.g. 404 from route not found)
+    if (error.statusCode && error.statusCode < 500) {
+        return reply.status(error.statusCode).send({
+            error: {
+                code: 'REQUEST_ERROR',
+                message: error.message,
+                statusCode: error.statusCode,
+            },
+        });
+    }
+
+    // Fallback: 500 Internal Server Error
+    return reply.status(500).send({
         error: {
-            message: error.message,
-            statusCode,
+            code: 'INTERNAL_ERROR',
+            message: config.nodeEnv === 'development' ? error.message : 'Internal server error',
+            statusCode: 500,
             ...(config.nodeEnv === 'development' && { stack: error.stack }),
         },
     });
