@@ -5,6 +5,7 @@ import { GroupDetailScreen } from '@screens/groups/GroupDetailScreen';
 import { CreateGroupScreen } from '@screens/groups/CreateGroupScreen';
 import { AddExpenseScreen } from '@screens/expenses/AddExpenseScreen';
 import { ExpenseDetailScreen } from '@screens/expenses/ExpenseDetailScreen';
+import { EditExpenseScreen } from '@screens/expenses/EditExpenseScreen';
 import { BalancesScreen } from '@screens/settlements/BalancesScreen';
 import { SettleUpScreen } from '@screens/settlements/SettleUpScreen';
 import type { GroupsStackParamList } from '@types';
@@ -38,6 +39,11 @@ export const GroupsNavigator = () => {
                 name="ExpenseDetail"
                 component={ExpenseDetailScreen}
                 options={{ title: 'Expense Details' }}
+            />
+            <Stack.Screen
+                name="EditExpense"
+                component={EditExpenseScreen}
+                options={{ title: 'Edit Expense', presentation: 'modal' }}
             />
             <Stack.Screen
                 name="Balances"
