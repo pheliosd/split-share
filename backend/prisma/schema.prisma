@@ -1,0 +1,338 @@
+// Prisma Schema for Splitwise Alternative
+// PostgreSQL Database
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// USER & AUTHENTICATION
+// ============================================
+
+model User {
+  id        String   @id @default(uuid())
+  email     String?  @unique
+  phone     String?  @unique
+  passwordHash String? @map("password_hash")
+  
+  name      String
+  avatarUrl String?  @map("avatar_url")
+  defaultCurrency String @default("USD") @map("default_currency") @db.Char(3)
+  
+  isVerified Boolean @default(false) @map("is_verified")
+  isAnonymous Boolean @default(false) @map("is_anonymous")
+  claimedFromAnonymousId String? @map("claimed_from_anonymous_id") @db.Uuid
+  
+  // OAuth fields
+  oauthProvider String? @map("oauth_provider") @db.VarChar(50)
+  oauthId       String? @map("oauth_id")
+  
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  lastLoginAt DateTime? @map("last_login_at")
+  
+  // Relations
+  groupMemberships GroupMember[]
+  groupsCreated    Group[] @relation("CreatedGroups")
+  
+  expensesPaid     Expense[] @relation("PaidByUser")
+  expensesCreated  Expense[] @relation("CreatedByUser")
+  expenseSplits    ExpenseSplit[]
+  expenseHistory   ExpenseHistory[]
+  
+  friendshipsInitiated Friendship[] @relation("InitiatedFriendships")
+  friendshipsReceived  Friendship[] @relation("ReceivedFriendships")
+  
+  settlementsAsPayer  Settlement[] @relation("SettlementPayer")
+  settlementsAsPayee  Settlement[] @relation("SettlementPayee")
+  settlementsCreated  Settlement[] @relation("SettlementCreator")
+  
+  balances            Balance[]
+  comments            ExpenseComment[]
+  notifications       NotificationPreference[]
+  
+  @@unique([oauthProvider, oauthId], name: "unique_oauth")
+  @@index([email])
+  @@index([phone])
+  @@index([oauthProvider, oauthId])
+  @@map("users")
+}
+
+model Friendship {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id") @db.Uuid
+  friendId  String   @map("friend_id") @db.Uuid
+  status    String   @default("pending") @db.VarChar(20) // pending, accepted, blocked
+  createdAt DateTime @default(now()) @map("created_at")
+  
+  user      User @relation("InitiatedFriendships", fields: [userId], references: [id], onDelete: Cascade)
+  friend    User @relation("ReceivedFriendships", fields: [friendId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, friendId], name: "unique_friendship")
+  @@index([userId, status])
+  @@index([friendId, status])
+  @@map("friendships")
+}
+
+// ============================================
+// GROUPS
+// ============================================
+
+model Group {
+  id          String   @id @default(uuid())
+  name        String   @db.VarChar(255)
+  description String?  @db.Text
+  type        String   @default("other") @db.VarChar(50) // trip, home, couple, office, other
+  currency    String   @default("USD") @db.Char(3)
+  avatarUrl   String?  @map("avatar_url") @db.Text
+  
+  createdBy   String   @map("created_by") @db.Uuid
+  creator     User     @relation("CreatedGroups", fields: [createdBy], references: [id])
+  
+  parentGroupId String? @map("parent_group_id") @db.Uuid
+  parentGroup   Group?  @relation("SubGroups", fields: [parentGroupId], references: [id])
+  subGroups     Group[] @relation("SubGroups")
+  
+  isArchived    Boolean @default(false) @map("is_archived")
+  simplifyDebts Boolean @default(true) @map("simplify_debts")
+  
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  
+  // Relations
+  members    GroupMember[]
+  tags       GroupTag[]
+  expenses   Expense[]
+  settlements Settlement[]
+  balances   Balance[]
+  
+  @@index([createdBy])
+  @@index([parentGroupId])
+  @@index([isArchived])
+  @@map("groups")
+}
+
+model GroupMember {
+  id       String   @id @default(uuid())
+  groupId  String   @map("group_id") @db.Uuid
+  userId   String   @map("user_id") @db.Uuid
+  role     String   @default("member") @db.VarChar(20) // admin, member
+  joinedAt DateTime @default(now()) @map("joined_at")
+  
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([groupId, userId], name: "unique_group_member")
+  @@index([groupId])
+  @@index([userId])
+  @@map("group_members")
+}
+
+model GroupTag {
+  id      String @id @default(uuid())
+  groupId String @map("group_id") @db.Uuid
+  tag     String @db.VarChar(50)
+  
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  
+  @@unique([groupId, tag], name: "unique_group_tag")
+  @@map("group_tags")
+}
+
+// ============================================
+// EXPENSES
+// ============================================
+
+model Expense {
+  id          String   @id @default(uuid())
+  groupId     String   @map("group_id") @db.Uuid
+  description String   @db.VarChar(255)
+  amount      Decimal  @db.Decimal(15, 4)
+  currency    String   @db.Char(3)
+  date        DateTime @db.Date
+  category    String?  @db.VarChar(50)
+  notes       String?  @db.Text
+  
+  payerId     String   @map("payer_id") @db.Uuid
+  payer       User     @relation("PaidByUser", fields: [payerId], references: [id])
+  
+  splitType   String   @map("split_type") @db.VarChar(20) // equal, exact, percentage, shares
+  
+  createdBy   String   @map("created_by") @db.Uuid
+  creator     User     @relation("CreatedByUser", fields: [createdBy], references: [id])
+  
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  
+  isDraft     Boolean  @default(false) @map("is_draft")
+  isFrozen    Boolean  @default(false) @map("is_frozen")
+  
+  receiptUrl  String?  @map("receipt_url") @db.Text
+  
+  // Exchange rate locked at expense creation
+  exchangeRateToGroupCurrency Decimal? @map("exchange_rate_to_group_currency") @db.Decimal(10, 6)
+  groupCurrency               String?  @map("group_currency") @db.Char(3)
+  
+  // For templates
+  isTemplate   Boolean @default(false) @map("is_template")
+  templateName String? @map("template_name") @db.VarChar(255)
+  
+  // Relations
+  group    Group            @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  splits   ExpenseSplit[]
+  history  ExpenseHistory[]
+  comments ExpenseComment[]
+  
+  @@index([groupId, date(sort: Desc)])
+  @@index([payerId])
+  @@index([createdBy])
+  @@index([category])
+  @@index([date])
+  @@index([isDraft])
+  @@map("expenses")
+}
+
+model ExpenseSplit {
+  id        String  @id @default(uuid())
+  expenseId String  @map("expense_id") @db.Uuid
+  userId    String  @map("user_id") @db.Uuid
+  
+  // For 'exact' split type
+  amount    Decimal? @db.Decimal(15, 4)
+  
+  // For 'percentage' split type
+  percentage Decimal? @db.Decimal(5, 2)
+  
+  // For 'shares' split type
+  shares    Int?
+  
+  // Computed owed amount (in expense currency)
+  owedAmount Decimal @map("owed_amount") @db.Decimal(15, 4)
+  
+  createdAt DateTime @default(now()) @map("created_at")
+  
+  expense Expense @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([expenseId, userId], name: "unique_expense_split")
+  @@index([expenseId])
+  @@index([userId])
+  @@map("expense_splits")
+}
+
+model ExpenseHistory {
+  id        String   @id @default(uuid())
+  expenseId String   @map("expense_id") @db.Uuid
+  action    String   @db.VarChar(20) // created, updated, deleted
+  changedBy String   @map("changed_by") @db.Uuid
+  changes   Json     @db.JsonB
+  createdAt DateTime @default(now()) @map("created_at")
+  
+  expense Expense @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [changedBy], references: [id])
+  
+  @@index([expenseId, createdAt(sort: Desc)])
+  @@map("expense_history")
+}
+
+model ExpenseComment {
+  id        String   @id @default(uuid())
+  expenseId String   @map("expense_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  comment   String   @db.Text
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  
+  expense Expense @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([expenseId, createdAt])
+  @@map("expense_comments")
+}
+
+// ============================================
+// BALANCES & SETTLEMENTS
+// ============================================
+
+model Balance {
+  id        String   @id @default(uuid())
+  groupId   String   @map("group_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  currency  String   @db.Char(3)
+  
+  // Total amount user is owed (positive) or owes (negative)
+  balance   Decimal  @default(0) @db.Decimal(15, 4)
+  
+  updatedAt DateTime @updatedAt @map("updated_at")
+  
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([groupId, userId, currency], name: "unique_balance")
+  @@index([groupId])
+  @@index([userId])
+  @@map("balances")
+}
+
+model Settlement {
+  id              String   @id @default(uuid())
+  groupId         String   @map("group_id") @db.Uuid
+  
+  payerId         String   @map("payer_id") @db.Uuid // Who paid
+  payeeId         String   @map("payee_id") @db.Uuid // Who received
+  
+  amount          Decimal  @db.Decimal(15, 4)
+  currency        String   @db.Char(3)
+  
+  date            DateTime @db.Date
+  notes           String?  @db.Text
+  
+  paymentMethod   String?  @map("payment_method") @db.VarChar(50) // cash, upi, paypal, venmo
+  paymentReference String? @map("payment_reference") @db.VarChar(255)
+  
+  isPartial       Boolean  @default(false) @map("is_partial")
+  
+  createdBy       String   @map("created_by") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at")
+  
+  group   Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  payer   User  @relation("SettlementPayer", fields: [payerId], references: [id])
+  payee   User  @relation("SettlementPayee", fields: [payeeId], references: [id])
+  creator User  @relation("SettlementCreator", fields: [createdBy], references: [id])
+  
+  @@index([groupId, date(sort: Desc)])
+  @@index([payerId])
+  @@index([payeeId])
+  @@map("settlements")
+}
+
+// ============================================
+// NOTIFICATIONS
+// ============================================
+
+model NotificationPreference {
+  id       String  @id @default(uuid())
+  userId   String  @map("user_id") @db.Uuid
+  groupId  String? @map("group_id") @db.Uuid // NULL = global settings
+  
+  emailEnabled Boolean @default(true) @map("email_enabled")
+  pushEnabled  Boolean @default(true) @map("push_enabled")
+  
+  notifyOnExpenseAdded   Boolean @default(true) @map("notify_on_expense_added")
+  notifyOnExpenseUpdated Boolean @default(true) @map("notify_on_expense_updated")
+  notifyOnExpenseDeleted Boolean @default(true) @map("notify_on_expense_deleted")
+  notifyOnSettlement     Boolean @default(true) @map("notify_on_settlement")
+  notifyOnComment        Boolean @default(true) @map("notify_on_comment")
+  
+  digestFrequency String @default("none") @db.VarChar(20) // none, daily, weekly
+  
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, groupId], name: "unique_notification_pref")
+  @@map("notification_preferences")
+}
