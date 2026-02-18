@@ -1,13 +1,93 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { View, StyleSheet, ScrollView, RefreshControl } from 'react-native';
 import { Text, Card, Button, useTheme, ActivityIndicator, FAB } from 'react-native-paper';
-import { useGetGroupsQuery } from '@api/groupsApi';
+import { useGetGroupsQuery, useGetGroupBalancesQuery } from '@api/groupsApi';
 import { useGetExpensesQuery } from '@api/expensesApi';
+import { useAppSelector } from '@hooks/redux';
 import { spacing } from '@theme';
 import { format } from 'date-fns';
 
+
+// Child component: fetches one group's balance and calls onBalance with the user's net
+const GroupBalanceFetcher = ({
+    groupId,
+    currentUserId,
+    onBalance,
+}: {
+    groupId: string;
+    currentUserId: string;
+    onBalance: (groupId: string, balance: number) => void;
+}) => {
+    const { data } = useGetGroupBalancesQuery(groupId);
+    React.useEffect(() => {
+        if (data?.balances) {
+            const entry = data.balances.find((b: any) => b.userId === currentUserId);
+            onBalance(groupId, entry ? parseFloat(entry.balance) : 0);
+        }
+    }, [data, groupId, currentUserId, onBalance]);
+    return null;
+};
+
+// Balance summary card — renders one GroupBalanceFetcher per group and sums results
+const BalanceSummaryCard = ({ groupIds, currentUserId }: { groupIds: string[]; currentUserId: string }) => {
+    const theme = useTheme();
+    const [balances, setBalances] = React.useState<Record<string, number>>({});
+
+    const handleBalance = React.useCallback((groupId: string, balance: number) => {
+        setBalances((prev) => ({ ...prev, [groupId]: balance }));
+    }, []);
+
+    const netBalance = useMemo(
+        () => Object.values(balances).reduce((sum, b) => sum + b, 0),
+        [balances]
+    );
+
+    const balanceColor =
+        netBalance > 0.01
+            ? '#4CAF50'
+            : netBalance < -0.01
+                ? theme.colors.error
+                : theme.colors.onSurfaceVariant;
+
+    const balanceLabel =
+        netBalance > 0.01
+            ? `You are owed $${netBalance.toFixed(2)}`
+            : netBalance < -0.01
+                ? `You owe $${Math.abs(netBalance).toFixed(2)}`
+                : 'All settled up! 🎉';
+
+    return (
+        <Card style={{ margin: 16, marginBottom: 8 }}>
+            {groupIds.map((id) => (
+                <GroupBalanceFetcher
+                    key={id}
+                    groupId={id}
+                    currentUserId={currentUserId}
+                    onBalance={handleBalance}
+                />
+            ))}
+            <Card.Content>
+                <Text variant="titleMedium" style={{ color: theme.colors.onSurfaceVariant }}>
+                    Total Balance
+                </Text>
+                <Text
+                    variant="displaySmall"
+                    style={{ color: balanceColor, fontWeight: 'bold' }}
+                >
+                    {netBalance >= 0 ? '+' : ''}${netBalance.toFixed(2)}
+                </Text>
+                <Text variant="bodySmall" style={{ color: balanceColor }}>
+                    {balanceLabel}
+                </Text>
+            </Card.Content>
+        </Card>
+    );
+};
+
+
 export const DashboardScreen = ({ navigation }: any) => {
     const theme = useTheme();
+    const currentUser = useAppSelector((state: any) => state.auth.user);
     const { data: groupsData, isLoading: groupsLoading, refetch: refetchGroups } = useGetGroupsQuery();
     const { data: expensesData, isLoading: expensesLoading, refetch: refetchExpenses } = useGetExpensesQuery({
         limit: 10,
@@ -16,6 +96,10 @@ export const DashboardScreen = ({ navigation }: any) => {
     });
 
     const [refreshing, setRefreshing] = React.useState(false);
+    const groupIds = useMemo(
+        () => (groupsData?.groups || []).map((g: any) => g.id),
+        [groupsData]
+    );
 
     const onRefresh = async () => {
         setRefreshing(true);
@@ -38,26 +122,24 @@ export const DashboardScreen = ({ navigation }: any) => {
                     <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
                 }
             >
-                {/* Balance Overview */}
-                <Card style={styles.balanceCard}>
-                    <Card.Content>
-                        <Text variant="titleMedium" style={{ color: theme.colors.onSurfaceVariant }}>
-                            Total Balance
-                        </Text>
-                        <Text
-                            variant="displaySmall"
-                            style={{
-                                color: theme.colors.primary,
-                                fontWeight: 'bold',
-                            }}
-                        >
-                            $0.00
-                        </Text>
-                        <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
-                            All settled up!
-                        </Text>
-                    </Card.Content>
-                </Card>
+                {/* Real Balance Overview */}
+                {currentUser?.id && groupIds.length > 0 ? (
+                    <BalanceSummaryCard groupIds={groupIds} currentUserId={currentUser.id} />
+                ) : (
+                    <Card style={styles.balanceCard}>
+                        <Card.Content>
+                            <Text variant="titleMedium" style={{ color: theme.colors.onSurfaceVariant }}>
+                                Total Balance
+                            </Text>
+                            <Text variant="displaySmall" style={{ color: theme.colors.onSurfaceVariant, fontWeight: 'bold' }}>
+                                $0.00
+                            </Text>
+                            <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
+                                No groups yet
+                            </Text>
+                        </Card.Content>
+                    </Card>
+                )}
 
                 {/* Quick Actions */}
                 <View style={styles.actionsContainer}>
