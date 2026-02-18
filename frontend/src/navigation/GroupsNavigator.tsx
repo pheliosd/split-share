@@ -4,6 +4,9 @@ import { GroupListScreen } from '@screens/groups/GroupListScreen';
 import { GroupDetailScreen } from '@screens/groups/GroupDetailScreen';
 import { CreateGroupScreen } from '@screens/groups/CreateGroupScreen';
 import { AddExpenseScreen } from '@screens/expenses/AddExpenseScreen';
+import { ExpenseDetailScreen } from '@screens/expenses/ExpenseDetailScreen';
+import { BalancesScreen } from '@screens/settlements/BalancesScreen';
+import { SettleUpScreen } from '@screens/settlements/SettleUpScreen';
 import type { GroupsStackParamList } from '@types';
 
 const Stack = createStackNavigator<GroupsStackParamList>();
@@ -19,7 +22,7 @@ export const GroupsNavigator = () => {
             <Stack.Screen
                 name="GroupDetail"
                 component={GroupDetailScreen}
-                options={{ title: 'Group Details' }}
+                options={({ route }: any) => ({ title: route.params?.groupName || 'Group' })}
             />
             <Stack.Screen
                 name="CreateGroup"
@@ -30,6 +33,21 @@ export const GroupsNavigator = () => {
                 name="AddExpense"
                 component={AddExpenseScreen}
                 options={{ title: 'Add Expense', presentation: 'modal' }}
+            />
+            <Stack.Screen
+                name="ExpenseDetail"
+                component={ExpenseDetailScreen}
+                options={{ title: 'Expense Details' }}
+            />
+            <Stack.Screen
+                name="Balances"
+                component={BalancesScreen}
+                options={{ title: 'Balances & Settlements' }}
+            />
+            <Stack.Screen
+                name="SettleUp"
+                component={SettleUpScreen}
+                options={{ title: 'Settle Up', presentation: 'modal' }}
             />
         </Stack.Navigator>
     );

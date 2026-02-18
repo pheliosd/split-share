@@ -7,8 +7,12 @@ import { spacing } from '@theme';
 import { format } from 'date-fns';
 
 export const GroupDetailScreen = ({ navigation, route }: any) => {
-    const { groupId } = route.params;
+    const { groupId, groupName } = route.params;
     const theme = useTheme();
+
+    React.useLayoutEffect(() => {
+        navigation.setOptions({ title: groupName || 'Group' });
+    }, [navigation, groupName]);
 
     const { data: groupData, isLoading: groupLoading, refetch: refetchGroup } = useGetGroupQuery(groupId);
     const { data: balancesData, isLoading: balancesLoading, refetch: refetchBalances } = useGetGroupBalancesQuery(groupId);
@@ -97,17 +101,31 @@ export const GroupDetailScreen = ({ navigation, route }: any) => {
                 <View style={styles.section}>
                     <View style={styles.sectionHeader}>
                         <Text variant="titleLarge">Expenses</Text>
-                        <Button
-                            onPress={() => navigation.navigate('AddExpense', { groupId })}
-                            icon="plus"
-                        >
-                            Add
-                        </Button>
+                        <View style={{ flexDirection: 'row', gap: 8 }}>
+                            <Button
+                                onPress={() => navigation.navigate('Balances', { groupId })}
+                                icon="scale-balance"
+                                compact
+                            >
+                                Balances
+                            </Button>
+                            <Button
+                                onPress={() => navigation.navigate('AddExpense', { groupId })}
+                                icon="plus"
+                                compact
+                            >
+                                Add
+                            </Button>
+                        </View>
                     </View>
 
                     {expensesData?.expenses && expensesData.expenses.length > 0 ? (
                         expensesData.expenses.map((expense: any) => (
-                            <Card key={expense.id} style={styles.expenseCard}>
+                            <Card
+                                key={expense.id}
+                                style={styles.expenseCard}
+                                onPress={() => navigation.navigate('ExpenseDetail', { expenseId: expense.id })}
+                            >
                                 <Card.Content>
                                     <View style={styles.expenseRow}>
                                         <View style={{ flex: 1 }}>
